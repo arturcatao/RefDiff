@@ -19,6 +19,8 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import refdiff.core.cst.CstNode;
+import refdiff.core.cst.CstNodeRelationship;
+import refdiff.core.cst.CstNodeRelationshipType;
 import refdiff.core.cst.CstRoot;
 import refdiff.core.cst.Location;
 import refdiff.core.cst.Stereotype;
@@ -222,6 +224,125 @@ public class ClojurePluginTest {
 			assertEquals(2, function.getLocation().getLine());
 			assertFunctionBody(source, function, "(inc x)");
 		}
+	}
+
+	@Test
+	public void shouldResolveUseRelationships() throws Exception {
+		CstRoot root = parseUses("uses/main_uses.clj", "uses/lib.clj");
+
+		CstNode target = functionInFile(root, "uses/main_uses.clj", "target/1");
+		CstNode libTarget = functionInFile(root, "uses/lib.clj", "target/1");
+		CstNode other = functionInFile(root, "uses/lib.clj", "other/1");
+		CstNode onlyGlobal = functionInFile(root, "uses/lib.clj", "only-global/1");
+		CstNode caller = functionInFile(root, "uses/main_uses.clj", "caller/1");
+		CstNode nested = functionInFile(root, "uses/main_uses.clj", "nested/1");
+		CstNode recursive = functionInFile(root, "uses/main_uses.clj", "recursive/1");
+		CstNode multi0 = functionInFile(root, "uses/main_uses.clj", "multi/0");
+		CstNode multi1 = functionInFile(root, "uses/main_uses.clj", "multi/1");
+		CstNode multi2 = functionInFile(root, "uses/main_uses.clj", "multi/2");
+		CstNode callMulti2 = functionInFile(root, "uses/main_uses.clj", "call-multi-2/0");
+
+		assertUse(root, caller, target);
+		assertNoUse(root, caller, libTarget);
+
+		assertUse(root, nested, target);
+		assertEquals(1L, countUses(root, nested, target));
+
+		assertUse(root, recursive, recursive);
+
+		assertUse(root, multi0, multi1);
+		assertUse(root, callMulti2, multi2);
+		assertNoUse(root, multi0, multi2);
+
+		CstNode variadicTarget = functionInFile(root, "uses/main_uses.clj", "variadic-target/1+");
+		CstNode callVariadic = functionInFile(root, "uses/main_uses.clj", "call-variadic/3");
+		CstNode callVariadicTooFew = functionInFile(root, "uses/main_uses.clj", "call-variadic-too-few/0");
+		assertUse(root, callVariadic, variadicTarget);
+		assertNoUse(root, callVariadicTooFew, variadicTarget);
+
+		assertUse(root, functionInFile(root, "uses/main_uses.clj", "qualified/0"), other);
+		assertUse(root, functionInFile(root, "uses/main_uses.clj", "aliased/0"), other);
+		assertUse(root, functionInFile(root, "uses/main_uses.clj", "global-only/0"), onlyGlobal);
+
+		CstNode higherOrder = functionInFile(root, "uses/main_uses.clj", "higher-order/1");
+		CstNode higherOrderList = functionInFile(root, "uses/main_uses.clj", "higher-order-list/1");
+		assertNoUse(root, higherOrder, target);
+		assertUse(root, higherOrderList, target);
+
+		CstNode missing = functionInFile(root, "uses/main_uses.clj", "missing/0");
+		assertNoOutgoingUse(root, missing);
+
+		CstNode duplicate = functionInFile(root, "uses/main_uses.clj", "duplicate/0");
+		assertEquals(1L, countUses(root, duplicate, target));
+
+		CstNode shadowed = functionInFile(root, "uses/main_uses.clj", "shadowed/1");
+		CstNode letShadowed = functionInFile(root, "uses/main_uses.clj", "let-shadowed/0");
+		assertNoUse(root, shadowed, target);
+		assertNoUse(root, letShadowed, target);
+
+		assertEquals(11, root.getRelationships().size());
+	}
+
+	@Test
+	public void shouldIgnoreAmbiguousGlobalCalls() throws Exception {
+		CstRoot root = parseUses("uses/ambiguous_a.clj", "uses/ambiguous_b.clj",
+			"uses/ambiguous_caller.clj");
+
+		assertTrue(root.getRelationships().isEmpty());
+	}
+
+	@Test
+	public void shouldResolveFunctionInAnotherFileOfTheSameNamespace() throws Exception {
+		CstRoot root = parseUses("uses/shared_a.clj", "uses/shared_b.clj");
+
+		CstNode target = functionInFile(root, "uses/shared_a.clj", "shared-target/1");
+		CstNode caller = functionInFile(root, "uses/shared_b.clj", "shared-caller/1");
+
+		assertUse(root, caller, target);
+		assertEquals(1, root.getRelationships().size());
+	}
+
+	private CstRoot parseUses(String... paths) throws Exception {
+		Path basePath = Paths.get("test-data/parser/clojure");
+		List<Path> files = Arrays.stream(paths).map(path -> Paths.get(path)).collect(Collectors.toList());
+		return plugin.parse(SourceFolder.from(basePath, files));
+	}
+
+	private static CstNode functionInFile(CstRoot root, String filePath, String localName) {
+		for (CstNode fileNode : root.getNodes()) {
+			if (filePath.equals(fileNode.getLocation().getFile())) {
+				return functionByLocalName(fileNode, localName);
+			}
+		}
+		throw new AssertionError("File not found: " + filePath);
+	}
+
+	private static void assertUse(CstRoot root, CstNode caller, CstNode callee) {
+		CstNodeRelationship relationship = new CstNodeRelationship(
+			CstNodeRelationshipType.USE, caller.getId(), callee.getId());
+		assertTrue("Expected USE " + caller.getLocalName() + " -> " + callee.getLocalName(),
+			root.getRelationships().contains(relationship));
+	}
+
+	private static void assertNoUse(CstRoot root, CstNode caller, CstNode callee) {
+		CstNodeRelationship relationship = new CstNodeRelationship(
+			CstNodeRelationshipType.USE, caller.getId(), callee.getId());
+		assertFalse("Unexpected USE " + caller.getLocalName() + " -> " + callee.getLocalName(),
+			root.getRelationships().contains(relationship));
+	}
+
+	private static long countUses(CstRoot root, CstNode caller, CstNode callee) {
+		return root.getRelationships().stream()
+			.filter(relationship -> relationship.getType() == CstNodeRelationshipType.USE)
+			.filter(relationship -> relationship.getN1() == caller.getId() && relationship.getN2() == callee.getId())
+			.count();
+	}
+
+	private static void assertNoOutgoingUse(CstRoot root, CstNode caller) {
+		assertFalse("Unexpected outgoing USE from " + caller.getLocalName(),
+			root.getRelationships().stream()
+				.anyMatch(relationship -> relationship.getType() == CstNodeRelationshipType.USE
+					&& relationship.getN1() == caller.getId()));
 	}
 
 	private static CstNode functionByLocalName(CstNode fileNode, String localName) {

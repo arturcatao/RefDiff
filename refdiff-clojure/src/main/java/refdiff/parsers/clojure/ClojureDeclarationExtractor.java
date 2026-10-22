@@ -2,8 +2,10 @@ package refdiff.parsers.clojure;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -32,6 +34,7 @@ final class ClojureDeclarationExtractor {
 
 	private static final IFn PARSE_STRING_ALL;
 	private static final IFn TAG;
+	private static final IFn NODE_TYPE;
 	private static final IFn INNER;
 	private static final IFn CHILDREN;
 	private static final IFn META;
@@ -45,14 +48,20 @@ final class ClojureDeclarationExtractor {
 	private static final Set<String> IGNORED_TAGS;
 	private static final Set<String> METADATA_TAGS;
 	private static final Set<String> DEFINITION_HEADS;
+	private static final Set<String> LET_FORMS;
+	private static final Set<String> FN_FORMS;
+	private static final Set<String> SPECIAL_FORMS;
+	private static final Set<String> IGNORED_CODE_FORMS;
 
 	static {
 		IFn require = Clojure.var("clojure.core", "require");
 		require.invoke(Clojure.read("rewrite-clj.parser"));
 		require.invoke(Clojure.read("rewrite-clj.node"));
+		require.invoke(Clojure.read("rewrite-clj.node.protocols"));
 
 		PARSE_STRING_ALL = Clojure.var("rewrite-clj.parser", "parse-string-all");
 		TAG = Clojure.var("rewrite-clj.node", "tag");
+		NODE_TYPE = Clojure.var("rewrite-clj.node.protocols", "node-type");
 		INNER = Clojure.var("rewrite-clj.node", "inner?");
 		CHILDREN = Clojure.var("rewrite-clj.node", "children");
 		META = Clojure.var("clojure.core", "meta");
@@ -69,9 +78,27 @@ final class ClojureDeclarationExtractor {
 		Set<String> definitionHeads = new HashSet<>();
 		Collections.addAll(definitionHeads, "defn", "defn-");
 		DEFINITION_HEADS = Collections.unmodifiableSet(definitionHeads);
+
+		Set<String> letForms = new HashSet<>();
+		Collections.addAll(letForms, "let", "let*", "loop", "loop*");
+		LET_FORMS = Collections.unmodifiableSet(letForms);
+
+		Set<String> fnForms = new HashSet<>();
+		Collections.addAll(fnForms, "fn", "fn*");
+		FN_FORMS = Collections.unmodifiableSet(fnForms);
+
+		Set<String> specialForms = new HashSet<>();
+		Collections.addAll(specialForms, "def", "if", "do", "var", "recur", "throw", "try",
+			"catch", "finally", "monitor-enter", "monitor-exit", "new", "set!", ".",
+			"deftype*", "reify*", "case*", "import*", "letfn*", "ns", "defn", "defn-");
+		SPECIAL_FORMS = Collections.unmodifiableSet(specialForms);
+
+		Set<String> ignoredCodeForms = new HashSet<>();
+		Collections.addAll(ignoredCodeForms, "quote", "syntax-quote");
+		IGNORED_CODE_FORMS = Collections.unmodifiableSet(ignoredCodeForms);
 	}
 
-	List<CstNode> extract(ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator) {
+	ClojureFileAnalysis analyze(ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator) {
 		Object root;
 		try {
 			root = PARSE_STRING_ALL.invoke(sourceText.getOriginal());
@@ -80,12 +107,14 @@ final class ClojureDeclarationExtractor {
 		}
 
 		List<Object> forms = semanticChildren(root);
-		String clojureNamespace = findNamespace(forms);
+		NamespaceInfo namespaceInfo = findNamespace(forms);
+		String clojureNamespace = namespaceInfo.name;
 		String functionNamespace = clojureNamespace == null || clojureNamespace.isEmpty()
 			? ""
 			: clojureNamespace + ".";
 
 		List<CstNode> functions = new ArrayList<>();
+		List<ClojureCallSite> calls = new ArrayList<>();
 		for (Object form : forms) {
 			Object declaration = unwrapMetadata(form);
 			List<Object> elements = semanticChildren(declaration);
@@ -95,13 +124,14 @@ final class ClojureDeclarationExtractor {
 
 			String head = tokenString(elements.get(0));
 			if (DEFINITION_HEADS.contains(head)) {
-				extractFunctions(form, declaration, elements, functionNamespace, sourceText, filePath, idGenerator, functions);
+				extractFunctions(form, declaration, elements, functionNamespace, namespaceInfo.aliases,
+					sourceText, filePath, idGenerator, functions, calls);
 			}
 		}
-		return functions;
+		return new ClojureFileAnalysis(functions, calls);
 	}
 
-	private static String findNamespace(List<Object> forms) {
+	private static NamespaceInfo findNamespace(List<Object> forms) {
 		for (Object form : forms) {
 			Object declaration = unwrapMetadata(form);
 			List<Object> elements = semanticChildren(declaration);
@@ -110,15 +140,62 @@ final class ClojureDeclarationExtractor {
 			}
 			if ("ns".equals(tokenString(elements.get(0)))) {
 				Object nameNode = unwrapMetadata(elements.get(1));
-				return tokenString(nameNode);
+				String name = tokenString(nameNode);
+				Map<String, String> aliases = new HashMap<>();
+				collectNamespaceAliases(elements, aliases);
+				return new NamespaceInfo(name, Collections.unmodifiableMap(aliases));
 			}
 		}
-		return null;
+		return new NamespaceInfo(null, Collections.emptyMap());
+	}
+
+	private static void collectNamespaceAliases(List<Object> nsElements, Map<String, String> aliases) {
+		for (int i = 1; i < nsElements.size(); i++) {
+			Object element = unwrapMetadata(nsElements.get(i));
+			if (!"list".equals(tag(element))) {
+				continue;
+			}
+			List<Object> requireElements = semanticChildren(element);
+			if (requireElements.isEmpty()) {
+				continue;
+			}
+			String head = keywordText(requireElements.get(0));
+			if (!":require".equals(head) && !":require-macros".equals(head)) {
+				continue;
+			}
+			for (int j = 1; j < requireElements.size(); j++) {
+				collectAliasFromRequire(requireElements.get(j), aliases);
+			}
+		}
+	}
+
+	private static void collectAliasFromRequire(Object spec, Map<String, String> aliases) {
+		Object vector = unwrapMetadata(spec);
+		if (!"vector".equals(tag(vector))) {
+			return;
+		}
+		List<Object> parts = semanticChildren(vector);
+		if (parts.isEmpty()) {
+			return;
+		}
+		String namespace = tokenString(unwrapMetadata(parts.get(0)));
+		if (namespace == null) {
+			return;
+		}
+		for (int i = 1; i + 1 < parts.size(); i++) {
+			String keyword = keywordText(parts.get(i));
+			if (":as".equals(keyword) || ":as-alias".equals(keyword)) {
+				String alias = tokenString(unwrapMetadata(parts.get(i + 1)));
+				if (alias != null && !alias.isEmpty()) {
+					aliases.put(alias, namespace);
+				}
+			}
+		}
 	}
 
 	private static void extractFunctions(Object originalForm, Object declaration, List<Object> elements,
-			String namespace, ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator,
-			List<CstNode> functions) {
+			String namespace, Map<String, String> namespaceAliases, ClojureSourceText sourceText,
+			String filePath, AtomicInteger idGenerator, List<CstNode> functions, List<ClojureCallSite> calls) {
 		if (elements.size() < 2) {
 			return;
 		}
@@ -151,7 +228,7 @@ final class ClojureDeclarationExtractor {
 		Object first = unwrapMetadata(tail.get(0));
 		if ("vector".equals(tag(first))) {
 			addFunctionNode(originalForm, simpleName, first, tail.subList(1, tail.size()),
-				namespace, sourceText, filePath, idGenerator, functions);
+				namespace, namespaceAliases, sourceText, filePath, idGenerator, functions, calls);
 			return;
 		}
 
@@ -161,8 +238,8 @@ final class ClojureDeclarationExtractor {
 				List<Object> arityElements = semanticChildren(arityForm);
 				Object parameters = unwrapMetadata(arityElements.get(0));
 				addFunctionNode(originalForm, simpleName, parameters,
-					arityElements.subList(1, arityElements.size()), namespace, sourceText, filePath,
-					idGenerator, functions);
+					arityElements.subList(1, arityElements.size()), namespace, namespaceAliases,
+					sourceText, filePath, idGenerator, functions, calls);
 			}
 		}
 	}
@@ -182,8 +259,9 @@ final class ClojureDeclarationExtractor {
 	}
 
 	private static void addFunctionNode(Object originalForm, String simpleName, Object parameters,
-			List<Object> bodyNodes, String namespace, ClojureSourceText sourceText, String filePath,
-			AtomicInteger idGenerator, List<CstNode> functions) {
+			List<Object> bodyNodes, String namespace, Map<String, String> namespaceAliases,
+			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator,
+			List<CstNode> functions, List<ClojureCallSite> calls) {
 		ParsedParameters parsedParameters = parseParameters(parameters, sourceText);
 		int arity = parsedParameters.fixedArity;
 		String localName = simpleName + "/" + arity + (parsedParameters.variadic ? "+" : "");
@@ -195,8 +273,9 @@ final class ClojureDeclarationExtractor {
 			? end(parameters, sourceText)
 			: end(bodyNodes.get(bodyNodes.size() - 1), sourceText);
 
-		addNode(originalForm, simpleName, localName, parsedParameters.parameters, bodyBegin, bodyEnd,
-			namespace, sourceText, filePath, idGenerator, functions);
+		CstNode function = addNode(originalForm, simpleName, localName, parsedParameters.parameters,
+			bodyBegin, bodyEnd, namespace, sourceText, filePath, idGenerator, functions);
+		collectCalls(bodyNodes, function, parsedParameters.localNames, namespaceAliases, calls);
 	}
 
 	private static void addFunctionNode(Object originalForm, String simpleName, int arity, boolean variadic,
@@ -207,7 +286,7 @@ final class ClojureDeclarationExtractor {
 			filePath, idGenerator, functions);
 	}
 
-	private static void addNode(Object originalForm, String simpleName, String localName,
+	private static CstNode addNode(Object originalForm, String simpleName, String localName,
 			List<Parameter> parameters, int normalizedBodyBegin, int normalizedBodyEnd, String namespace,
 			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator, List<CstNode> functions) {
 		int begin = sourceText.toOriginalOffset(start(originalForm, sourceText));
@@ -224,10 +303,12 @@ final class ClojureDeclarationExtractor {
 		node.setLocation(new Location(filePath, begin, end, sourceText.lineNumber(begin), bodyBegin, bodyEnd));
 		node.addStereotypes(Stereotype.HAS_BODY);
 		functions.add(node);
+		return node;
 	}
 
 	private static ParsedParameters parseParameters(Object parameters, ClojureSourceText sourceText) {
 		List<Parameter> parsed = new ArrayList<>();
+		Set<String> localNames = new HashSet<>();
 		int fixedArity = 0;
 		boolean variadic = false;
 
@@ -240,11 +321,12 @@ final class ClojureDeclarationExtractor {
 			}
 
 			parsed.add(new Parameter(parameterName(parameter, sourceText)));
+			collectBindingNames(parameter, localNames);
 			if (!variadic) {
 				fixedArity++;
 			}
 		}
-		return new ParsedParameters(parsed, fixedArity, variadic);
+		return new ParsedParameters(parsed, localNames, fixedArity, variadic);
 	}
 
 	private static String parameterName(Object parameter, ClojureSourceText sourceText) {
@@ -255,12 +337,150 @@ final class ClojureDeclarationExtractor {
 		return sourceText.originalSlice(start(parameter, sourceText), end(parameter, sourceText));
 	}
 
-	private static String tag(Object node) {
-		Object tag = TAG.invoke(node);
-		if (tag instanceof Keyword) {
-			return ((Keyword) tag).getName();
+	private static void collectCalls(List<Object> bodyNodes, CstNode caller, Set<String> localNames,
+			Map<String, String> namespaceAliases, List<ClojureCallSite> calls) {
+		for (Object bodyNode : bodyNodes) {
+			visitForCalls(bodyNode, localNames, caller, namespaceAliases, calls);
 		}
-		return String.valueOf(tag).replaceFirst("^:", "");
+	}
+
+	private static void visitForCalls(Object node, Set<String> localNames, CstNode caller,
+			Map<String, String> namespaceAliases, List<ClojureCallSite> calls) {
+		Object value = unwrapMetadata(node);
+		if ("list".equals(tag(value))) {
+			visitListForCalls(value, localNames, caller, namespaceAliases, calls);
+			return;
+		}
+		for (Object child : semanticChildren(value)) {
+			visitForCalls(child, localNames, caller, namespaceAliases, calls);
+		}
+	}
+
+	private static void visitListForCalls(Object list, Set<String> localNames, CstNode caller,
+			Map<String, String> namespaceAliases, List<ClojureCallSite> calls) {
+		List<Object> elements = semanticChildren(list);
+		if (elements.isEmpty()) {
+			return;
+		}
+
+		Object headNode = unwrapMetadata(elements.get(0));
+		String head = tokenString(headNode);
+		if (head == null) {
+			visitAllForCalls(elements, 0, localNames, caller, namespaceAliases, calls);
+			return;
+		}
+
+		if (IGNORED_CODE_FORMS.contains(head)) {
+			return;
+		}
+		if (LET_FORMS.contains(head)) {
+			visitLetForCalls(elements, localNames, caller, namespaceAliases, calls);
+			return;
+		}
+		if (FN_FORMS.contains(head)) {
+			visitFnForCalls(elements, localNames, caller, namespaceAliases, calls);
+			return;
+		}
+
+		if (!SPECIAL_FORMS.contains(head) && !localNames.contains(head) && !isStringNode(headNode)) {
+			calls.add(new ClojureCallSite(caller, head, elements.size() - 1, namespaceAliases));
+		}
+		visitAllForCalls(elements, 1, localNames, caller, namespaceAliases, calls);
+	}
+
+	private static void visitLetForCalls(List<Object> elements, Set<String> localNames, CstNode caller,
+			Map<String, String> namespaceAliases, List<ClojureCallSite> calls) {
+		if (elements.size() < 2) {
+			return;
+		}
+
+		Object bindingVector = unwrapMetadata(elements.get(1));
+		if (!"vector".equals(tag(bindingVector))) {
+			visitAllForCalls(elements, 1, localNames, caller, namespaceAliases, calls);
+			return;
+		}
+
+		List<Object> bindings = semanticChildren(bindingVector);
+		Set<String> scope = new HashSet<>(localNames);
+		for (int i = 0; i < bindings.size(); i += 2) {
+			Object bindingForm = unwrapMetadata(bindings.get(i));
+			if (i + 1 < bindings.size()) {
+				visitForCalls(bindings.get(i + 1), scope, caller, namespaceAliases, calls);
+			}
+			collectBindingNames(bindingForm, scope);
+		}
+		visitAllForCalls(elements, 2, scope, caller, namespaceAliases, calls);
+	}
+
+	private static void visitFnForCalls(List<Object> elements, Set<String> localNames, CstNode caller,
+			Map<String, String> namespaceAliases, List<ClojureCallSite> calls) {
+		int parameterIndex = -1;
+		for (int i = 1; i < elements.size(); i++) {
+			if ("vector".equals(tag(unwrapMetadata(elements.get(i))))) {
+				parameterIndex = i;
+				break;
+			}
+		}
+
+		if (parameterIndex == -1) {
+			visitAllForCalls(elements, 1, localNames, caller, namespaceAliases, calls);
+			return;
+		}
+
+		Set<String> scope = new HashSet<>(localNames);
+		if (parameterIndex == 2) {
+			String functionName = tokenString(unwrapMetadata(elements.get(1)));
+			if (functionName != null && !functionName.isEmpty()) {
+				scope.add(functionName);
+			}
+		}
+		collectBindingNames(unwrapMetadata(elements.get(parameterIndex)), scope);
+		visitAllForCalls(elements, parameterIndex + 1, scope, caller, namespaceAliases, calls);
+	}
+
+	private static void visitAllForCalls(List<Object> elements, int start, Set<String> localNames,
+			CstNode caller, Map<String, String> namespaceAliases, List<ClojureCallSite> calls) {
+		for (int i = start; i < elements.size(); i++) {
+			visitForCalls(elements.get(i), localNames, caller, namespaceAliases, calls);
+		}
+	}
+
+	private static void collectBindingNames(Object node, Set<String> names) {
+		Object value = unwrapMetadata(node);
+		if ("token".equals(tag(value))) {
+			if (!isStringNode(value)) {
+				String name = string(value);
+				if (!"&".equals(name) && !name.isEmpty()) {
+					names.add(name);
+				}
+			}
+			return;
+		}
+		for (Object child : semanticChildren(value)) {
+			collectBindingNames(child, names);
+		}
+	}
+
+	private static String keywordText(Object node) {
+		if (!"keyword".equals(nodeType(node))) {
+			return null;
+		}
+		return string(node);
+	}
+
+	private static String tag(Object node) {
+		return keywordName(TAG.invoke(node));
+	}
+
+	private static String nodeType(Object node) {
+		return keywordName(NODE_TYPE.invoke(node));
+	}
+
+	private static String keywordName(Object value) {
+		if (value instanceof Keyword) {
+			return ((Keyword) value).getName();
+		}
+		return String.valueOf(value).replaceFirst("^:", "");
 	}
 
 	private static boolean isInner(Object node) {
@@ -344,13 +564,26 @@ final class ClojureDeclarationExtractor {
 
 	private static final class ParsedParameters {
 		private final List<Parameter> parameters;
+		private final Set<String> localNames;
 		private final int fixedArity;
 		private final boolean variadic;
 
-		private ParsedParameters(List<Parameter> parameters, int fixedArity, boolean variadic) {
+		private ParsedParameters(List<Parameter> parameters, Set<String> localNames, int fixedArity,
+				boolean variadic) {
 			this.parameters = parameters;
+			this.localNames = localNames;
 			this.fixedArity = fixedArity;
 			this.variadic = variadic;
+		}
+	}
+
+	private static final class NamespaceInfo {
+		private final String name;
+		private final Map<String, String> aliases;
+
+		private NamespaceInfo(String name, Map<String, String> aliases) {
+			this.name = name;
+			this.aliases = aliases;
 		}
 	}
 }

@@ -1,5 +1,6 @@
 package refdiff.parsers.clojure;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -30,6 +31,7 @@ public class ClojurePlugin implements LanguagePlugin {
 	public CstRoot parse(SourceFileSet sources) throws Exception {
 		CstRoot root = new CstRoot();
 		AtomicInteger nextId = new AtomicInteger(0);
+		List<ClojureCallSite> calls = new ArrayList<>();
 
 		for (SourceFile sourceFile : sources.getSourceFiles()) {
 			String sourceCode = sources.readContent(sourceFile);
@@ -41,7 +43,9 @@ public class ClojurePlugin implements LanguagePlugin {
 			List<CstNode> functions;
 			try {
 				tokens = tokenizer.tokenize(sourceText);
-				functions = declarationExtractor.extract(sourceText, filePath, nextId);
+				ClojureFileAnalysis analysis = declarationExtractor.analyze(sourceText, filePath, nextId);
+				functions = analysis.getFunctions();
+				calls.addAll(analysis.getCalls());
 			} catch (RuntimeException e) {
 				throw new RuntimeException("Error parsing " + sources.describeLocation(sourceFile) + ": " + e.getMessage(), e);
 			}
@@ -59,6 +63,7 @@ public class ClojurePlugin implements LanguagePlugin {
 			root.addTokenizedFile(new TokenizedSource(filePath, tokens));
 		}
 
+		ClojureUseResolver.addUseRelationships(root, calls);
 		return root;
 	}
 
