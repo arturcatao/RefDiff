@@ -73,6 +73,8 @@ public class CstComparator {
 		
 		private final Map<CstNode, CstNode> mapBeforeToAfter = new HashMap<>();
 		private final Map<CstNode, CstNode> mapAfterToBefore = new HashMap<>();
+		private static final double RENAME_BODY_SIMILARITY_THRESHOLD = 0.9;
+		private static final int MIN_RENAME_BODY_TOKEN_COUNT = 2;
 		
 		DiffBuilder(SourceRepresentationBuilder<T> srb, SourceFileSet sourcesBefore, SourceFileSet sourcesAfter, CstComparatorMonitor monitor) throws Exception {
 			this.srb = srb;
@@ -136,6 +138,7 @@ public class CstComparator {
 			findMatchesBySimilarity(false);
 			//findMatchesByUniqueName(0.25);
 			findMatchesByChildren();
+			findRenameMatchesByBodySimilarity();
 			createRelationshipsForMatchings();
 			findPullPushDownAbstract();
 			findAdditionalPullUpAndPushDown();
@@ -302,6 +305,59 @@ public class CstComparator {
 			}
 		}
 		
+		private void findRenameMatchesByBodySimilarity() {
+			Map<CstNode, List<PotentialMatch>> candidatesByBefore = new HashMap<>();
+			Map<CstNode, List<PotentialMatch>> candidatesByAfter = new HashMap<>();
+			for (CstNode n1 : removed) {
+				if (!n1.getParent().isPresent()) {
+					continue;
+				}
+				for (CstNode n2 : added) {
+					if (!n2.getParent().isPresent()) {
+						continue;
+					}
+					if (!sameType(n1, n2) || anonymous(n1) || anonymous(n2)) {
+						continue;
+					}
+					if (!sameLocation(n1, n2)) {
+						continue;
+					}
+					if (n1.getParameters().size() != n2.getParameters().size()) {
+						continue;
+					}
+					Optional<RelationshipType> optRelationshipType = findRelationshipForCandidate(n1, n2);
+					if (!optRelationshipType.isPresent() || optRelationshipType.get() != RelationshipType.RENAME) {
+						continue;
+					}
+					T body1 = before.bodySourceRep(n1);
+					T body2 = after.bodySourceRep(n2);
+					if (srb.size(body1) < MIN_RENAME_BODY_TOKEN_COUNT || srb.size(body2) < MIN_RENAME_BODY_TOKEN_COUNT) {
+						continue;
+					}
+					double bodyScore = srb.similarity(body1, body2);
+					if (bodyScore <= RENAME_BODY_SIMILARITY_THRESHOLD) {
+						continue;
+					}
+					PotentialMatch candidate = new PotentialMatch(n1, n2, Math.max(before.depth(n1), after.depth(n2)), bodyScore);
+					candidatesByBefore.computeIfAbsent(n1, key -> new ArrayList<>()).add(candidate);
+					candidatesByAfter.computeIfAbsent(n2, key -> new ArrayList<>()).add(candidate);
+				}
+			}
+			for (List<PotentialMatch> candidates : candidatesByBefore.values()) {
+				if (candidates.size() != 1) {
+					continue;
+				}
+				PotentialMatch candidate = candidates.get(0);
+				List<PotentialMatch> reverseCandidates = candidatesByAfter.get(candidate.getNodeAfter());
+				if (reverseCandidates == null || reverseCandidates.size() != 1) {
+					continue;
+				}
+				if (reverseCandidates.get(0).getNodeBefore() == candidate.getNodeBefore()) {
+					addMatch(candidate.getNodeBefore(), candidate.getNodeAfter());
+				}
+			}
+		}
+
 		private double computeHardSimilarityScore(CstNode n1, CstNode n2) {
 			return srb.similarity(before.sourceRep(n1), after.sourceRep(n2));
 		}
