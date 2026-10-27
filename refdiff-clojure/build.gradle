@@ -22,6 +22,21 @@ java {
     withSourcesJar()
 }
 
+task runClojureCommit(type: JavaExec) {
+    group = 'application'
+    description = 'Runs RefDiff for a Clojure commit against its parent commit'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    main = 'refdiff.cli.RunClojureCommit'
+    args = [
+        project.findProperty('repo') ?: '',
+        project.findProperty('commit') ?: ''
+    ]
+    if (project.hasProperty('cache')) {
+        args project.property('cache')
+    }
+}
+
 publishing {
     publications {
         refdiffClojure(MavenPublication) {

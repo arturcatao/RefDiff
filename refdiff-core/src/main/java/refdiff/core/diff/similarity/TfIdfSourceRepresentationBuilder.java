@@ -66,7 +66,11 @@ public class TfIdfSourceRepresentationBuilder implements SourceRepresentationBui
 	@Override
 	public TfIdfSourceRepresentation buildForFragment(List<String> tokenizedSourceCode) {
 		Multiset<String> multiset = new Multiset<String>();
-		multiset.addAll(tokenizedSourceCode);
+		for (String term : tokenizedSourceCode) {
+			if (vocabulary.contains(term)) {
+				multiset.add(term);
+			}
+		}
 		return new TfIdfSourceRepresentation(multiset, vocabulary);
 	}
 	
