@@ -30,6 +30,10 @@ public class Vocabulary {
 		return df.get(key).getMax();
 	}
 	
+	public boolean contains(String key) {
+		return df.containsKey(key);
+	}
+	
 	private void count(boolean isBefore, String term) {
 		df.computeIfAbsent(term, key -> new FreqCounter()).increment(isBefore);
 	}

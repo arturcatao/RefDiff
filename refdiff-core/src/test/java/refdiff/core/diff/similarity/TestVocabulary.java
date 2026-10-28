@@ -23,6 +23,8 @@ public class TestVocabulary {
 		assertThat(v.getDf("b"), is(1));
 		assertThat(v.getDf("c"), is(1));
 		assertThat(v.getDf("d"), is(1));
+		assertThat(v.contains("a"), is(true));
+		assertThat(v.contains("missing"), is(false));
 	}
 	
 }
