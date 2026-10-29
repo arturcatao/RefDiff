@@ -9,6 +9,7 @@ repositories {
 
 dependencies {
     api project(':refdiff-core')
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.8.9'
     implementation 'rewrite-clj:rewrite-clj:1.3.59'
     implementation 'org.clojure:clojure:1.11.4'
     implementation 'org.clojure:tools.reader:1.6.0'
@@ -28,6 +29,21 @@ task runClojureCommit(type: JavaExec) {
     dependsOn classes
     classpath = sourceSets.main.runtimeClasspath
     main = 'refdiff.cli.RunClojureCommit'
+    args = [
+        project.findProperty('repo') ?: '',
+        project.findProperty('commit') ?: ''
+    ]
+    if (project.hasProperty('cache')) {
+        args project.property('cache')
+    }
+}
+
+task runClojureCommitJson(type: JavaExec) {
+    group = 'application'
+    description = 'Runs RefDiff for a Clojure commit and prints structured JSON'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    main = 'refdiff.cli.RunClojureCommitJson'
     args = [
         project.findProperty('repo') ?: '',
         project.findProperty('commit') ?: ''
