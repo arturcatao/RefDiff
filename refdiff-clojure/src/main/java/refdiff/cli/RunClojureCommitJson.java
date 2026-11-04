@@ -23,6 +23,7 @@ import refdiff.core.cst.CstRoot;
 import refdiff.core.diff.CstDiff;
 import refdiff.core.diff.Relationship;
 import refdiff.core.io.GitHelper;
+import refdiff.parsers.clojure.ClojureFunctionLocation;
 import refdiff.parsers.clojure.ClojurePlugin;
 
 /** Runs RefDiff for a Clojure commit and writes one JSON document to stdout. */
@@ -178,6 +179,11 @@ public class RunClojureCommitJson {
 		location.put("line", node.getLocation().getLine());
 		location.put("body_begin", node.getLocation().getBodyBegin());
 		location.put("body_end", node.getLocation().getBodyEnd());
+		if (node.getLocation() instanceof ClojureFunctionLocation) {
+			ClojureFunctionLocation functionLocation = (ClojureFunctionLocation) node.getLocation();
+			location.put("arity_begin", functionLocation.getArityBegin());
+			location.put("arity_end", functionLocation.getArityEnd());
+		}
 		ArrayNode parameters = result.putArray("parameters");
 		node.getParameters().forEach(parameter -> parameters.add(parameter.getName()));
 		return result;

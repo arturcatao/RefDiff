@@ -227,7 +227,7 @@ final class ClojureDeclarationExtractor {
 
 		Object first = unwrapMetadata(tail.get(0));
 		if ("vector".equals(tag(first))) {
-			addFunctionNode(originalForm, simpleName, first, tail.subList(1, tail.size()),
+			addFunctionNode(originalForm, simpleName, null, tail.get(0), tail.subList(1, tail.size()),
 				namespace, namespaceAliases, sourceText, filePath, idGenerator, functions, calls);
 			return;
 		}
@@ -236,8 +236,7 @@ final class ClojureDeclarationExtractor {
 			for (Object tailNode : tail) {
 				Object arityForm = unwrapMetadata(tailNode);
 				List<Object> arityElements = semanticChildren(arityForm);
-				Object parameters = unwrapMetadata(arityElements.get(0));
-				addFunctionNode(originalForm, simpleName, parameters,
+				addFunctionNode(originalForm, simpleName, tailNode, arityElements.get(0),
 					arityElements.subList(1, arityElements.size()), namespace, namespaceAliases,
 					sourceText, filePath, idGenerator, functions, calls);
 			}
@@ -258,10 +257,12 @@ final class ClojureDeclarationExtractor {
 		return true;
 	}
 
-	private static void addFunctionNode(Object originalForm, String simpleName, Object parameters,
+	private static void addFunctionNode(Object originalForm, String simpleName, Object arityForm,
+			Object parameterForm,
 			List<Object> bodyNodes, String namespace, Map<String, String> namespaceAliases,
 			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator,
 			List<CstNode> functions, List<ClojureCallSite> calls) {
+		Object parameters = unwrapMetadata(parameterForm);
 		ParsedParameters parsedParameters = parseParameters(parameters, sourceText);
 		int arity = parsedParameters.fixedArity;
 		String localName = simpleName + "/" + arity + (parsedParameters.variadic ? "+" : "");
@@ -275,6 +276,11 @@ final class ClojureDeclarationExtractor {
 
 		CstNode function = addNode(originalForm, simpleName, localName, parsedParameters.parameters,
 			bodyBegin, bodyEnd, namespace, sourceText, filePath, idGenerator, functions);
+		Location declaration = function.getLocation();
+		int arityBegin = start(arityForm == null ? parameterForm : arityForm, sourceText);
+		int arityEnd = arityForm == null ? bodyEnd : end(arityForm, sourceText);
+		function.setLocation(new ClojureFunctionLocation(declaration,
+			sourceText.toOriginalOffset(arityBegin), sourceText.toOriginalOffset(arityEnd)));
 		collectCalls(bodyNodes, function, parsedParameters.localNames, namespaceAliases, calls);
 	}
 

@@ -145,6 +145,9 @@ public class ClojurePluginTest {
 		assertEquals(Arrays.asList("x"), parameterNames(multi1));
 		assertEquals(Arrays.asList("x", "y"), parameterNames(multi2));
 		assertEquals(Arrays.asList("x", "y", "more"), parameterNames(multi3));
+		assertAritySpan(source, multi1, "([x] (str x))");
+		assertAritySpan(source, multi2, "([x y] (+ x y))");
+		assertAritySpan(source, multi3, "([x y & more] (apply + x y more))");
 		assertFunctionBody(source, multi1, "(str x)");
 		assertFunctionBody(source, multi2, "(+ x y)");
 		assertFunctionBody(source, multi3, "(apply + x y more)");
@@ -356,6 +359,11 @@ public class ClojurePluginTest {
 
 	private static List<String> parameterNames(CstNode function) {
 		return function.getParameters().stream().map(parameter -> parameter.getName()).collect(Collectors.toList());
+	}
+
+	private static void assertAritySpan(String source, CstNode function, String expected) {
+		ClojureFunctionLocation location = (ClojureFunctionLocation) function.getLocation();
+		assertEquals(expected, source.substring(location.getArityBegin(), location.getArityEnd()));
 	}
 
 	private static void assertFunctionBody(String source, CstNode function, String expected) {
