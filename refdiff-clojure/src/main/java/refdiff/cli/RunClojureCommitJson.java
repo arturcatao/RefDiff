@@ -164,6 +164,7 @@ public class RunClojureCommitJson {
 		}
 		ObjectNode result = JSON.createObjectNode();
 		result.put("id", node.getId());
+		node.getParent().ifPresent(parent -> result.put("parent_id", parent.getId()));
 		result.put("type", node.getType());
 		result.put("name", node.getSimpleName());
 		result.put("signature", node.getLocalName());

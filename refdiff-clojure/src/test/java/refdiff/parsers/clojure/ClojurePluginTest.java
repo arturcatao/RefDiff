@@ -91,6 +91,66 @@ public class ClojurePluginTest {
 		assertTrue(diff.getRefactoringRelationships().isEmpty());
 	}
 
+	@Test
+	public void shouldExtractProtocolSignaturesAndMethodImplementations() throws Exception {
+		String source = "(ns demo)\n"
+			+ "(defprotocol P (m [this] [this x] \"docs\"))\n"
+			+ "(defrecord R [field] P (m [this] field))\n"
+			+ "(deftype T [field] P (m [this] field))\n"
+			+ "(extend-type String P (m ([this] this) ([this x] x)))\n"
+			+ "(extend-protocol P nil (m [this] :nil) Long (m [this] this))\n"
+			+ "(extend-type nil P (m [this] :nil))\n";
+		CstNode file = plugin.parse(writeSource("members", source)).getNodes().get(0);
+		assertEquals(6, file.getNodes().size());
+
+		CstNode protocol = functionByLocalName(file, "defprotocol P");
+		assertEquals("ProtocolDeclaration", protocol.getType());
+		assertEquals(2, protocol.getNodes().size());
+		CstNode signature = functionByLocalName(protocol, "protocol-signature P m/2");
+		assertEquals("ProtocolMethodSignature", signature.getType());
+		assertFalse(signature.hasStereotype(Stereotype.HAS_BODY));
+		assertFunctionBody(source, signature, "");
+		assertAritySpan(source, signature, "[this x]");
+		assertSame(protocol, signature.getParent().get());
+
+		CstNode record = functionByLocalName(file, "defrecord R");
+		assertEquals("RecordDeclaration", record.getType());
+		CstNode method = functionByLocalName(record, "implementation R P m/1");
+		assertEquals("MethodImplementation", method.getType());
+		assertTrue(method.hasStereotype(Stereotype.HAS_BODY));
+		assertFunctionBody(source, method, "field");
+		assertSame(record, method.getParent().get());
+		CstNode type = functionByLocalName(file, "deftype T");
+		assertEquals("TypeDeclaration", type.getType());
+		assertFunctionBody(source, functionByLocalName(type, "implementation T P m/1"), "field");
+
+		CstNode typeExtension = functionByLocalName(file, "extend-type String [P]");
+		assertEquals("TypeExtension", typeExtension.getType());
+		assertEquals(2, typeExtension.getNodes().size());
+		assertAritySpan(source, functionByLocalName(typeExtension, "implementation String P m/2"), "([this x] x)");
+		CstNode protocolExtension = functionByLocalName(file, "extend-protocol P [Long nil]");
+		assertEquals("ProtocolExtension", protocolExtension.getType());
+		assertFunctionBody(source, functionByLocalName(protocolExtension, "implementation nil P m/1"), ":nil");
+		assertFunctionBody(source, functionByLocalName(protocolExtension, "implementation Long P m/1"), "this");
+		assertEquals(1, functionByLocalName(file, "extend-type nil [P]").getNodes().size());
+	}
+
+	@Test
+	public void shouldPairImplementationsByOwnerAndProtocol() throws Exception {
+		String before = "(ns demo)\n(defrecord R [] P (m [this] :a) Q (m [this] :b))\n"
+			+ "(deftype T [] P (m [this] :c))\n";
+		String after = "(ns demo)\n(deftype T [] P (m [this] :c))\n"
+			+ "(defrecord R [] Q (m [this] :b) P (m [this] :edited))\n";
+		CstDiff diff = new CstComparator(plugin).compare(writeSource("members-before", before),
+			writeSource("members-after", after));
+		assertEquals(3, diff.getRelationships().stream().filter(relationship ->
+			relationship.getType() == RelationshipType.SAME
+				&& "MethodImplementation".equals(relationship.getNodeBefore().getType())
+				&& relationship.getNodeBefore().getLocalName().equals(relationship.getNodeAfter().getLocalName())
+		).count());
+		assertTrue(diff.getRefactoringRelationships().isEmpty());
+	}
+
 	private SourceFolder writeSource(String directoryName, String source) throws Exception {
 		Path directory = temporaryFolder.newFolder(directoryName).toPath();
 		Files.write(directory.resolve("a.clj"), source.getBytes(StandardCharsets.UTF_8));

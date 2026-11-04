@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import clojure.java.api.Clojure;
@@ -120,12 +121,9 @@ final class ClojureDeclarationExtractor {
 				continue;
 			}
 			Object name = unwrapMetadata(elements.get(1));
-			if (!"symbol".equals(nodeType(name))) {
-				continue;
-			}
-
 			String head = tokenString(elements.get(0));
-			if (head == null) {
+			if (head == null || (!"symbol".equals(nodeType(name))
+					&& !("extend-type".equals(head) && "nil".equals(string(name))))) {
 				continue;
 			}
 			switch (head) {
@@ -135,6 +133,14 @@ final class ClojureDeclarationExtractor {
 			case "defmethod":
 				extractCallable(form, head, string(name), elements, functionNamespace, namespaceInfo.aliases,
 					sourceText, filePath, idGenerator, declarations, calls);
+				break;
+			case "defprotocol":
+			case "defrecord":
+			case "deftype":
+			case "extend-type":
+			case "extend-protocol":
+				extractMethodContainer(form, head, string(name), elements, functionNamespace, sourceText,
+					filePath, idGenerator, declarations);
 				break;
 			case "def":
 			case "defmulti":
@@ -208,6 +214,110 @@ final class ClojureDeclarationExtractor {
 				}
 			}
 		}
+	}
+
+	private static void extractMethodContainer(Object form, String head, String name, List<Object> elements,
+			String namespace, ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator,
+			List<CstNode> declarations) {
+		boolean protocolDeclaration = "defprotocol".equals(head);
+		boolean extensionByProtocol = "extend-protocol".equals(head);
+		int firstMember = 2;
+		String type;
+		switch (head) {
+		case "defprotocol":
+			type = "ProtocolDeclaration";
+			break;
+		case "defrecord":
+		case "deftype":
+			if (elements.size() < 3 || !"vector".equals(tag(unwrapMetadata(elements.get(2))))) {
+				return;
+			}
+			firstMember = 3;
+			type = "defrecord".equals(head) ? "RecordDeclaration" : "TypeDeclaration";
+			break;
+		case "extend-type":
+			type = "TypeExtension";
+			break;
+		default:
+			type = "ProtocolExtension";
+			break;
+		}
+
+		int headerEnd = end(elements.get(firstMember - 1), sourceText);
+		CstNode container = addNode(form, type, name, head + " " + name, Collections.emptyList(),
+			headerEnd, headerEnd, false, namespace, sourceText, filePath, idGenerator, declarations);
+
+		String group = null;
+		Set<String> extensionGroups = new TreeSet<>();
+		List<CstNode> methods = new ArrayList<>();
+		for (int i = firstMember; i < elements.size(); i++) {
+			Object memberForm = elements.get(i);
+			Object member = unwrapMetadata(memberForm);
+			if (!protocolDeclaration && ("symbol".equals(nodeType(member))
+					|| (extensionByProtocol && "nil".equals(string(member))))) {
+				group = string(member);
+				extensionGroups.add(group);
+			} else if ("list".equals(tag(member)) && (protocolDeclaration || group != null)) {
+				String target = extensionByProtocol ? group : name;
+				String protocol = protocolDeclaration || extensionByProtocol ? name : group;
+				extractMember(memberForm, semanticChildren(member), target, protocol, protocolDeclaration,
+					namespace, sourceText, filePath, idGenerator, methods);
+			}
+		}
+		if ("extend-type".equals(head) || extensionByProtocol) {
+			container.setLocalName(head + " " + name + " [" + String.join(" ", extensionGroups) + "]");
+		}
+		methods.forEach(container::addNode);
+	}
+
+	private static void extractMember(Object form, List<Object> elements, String target, String protocol,
+			boolean signatureOnly, String namespace, ClojureSourceText sourceText, String filePath,
+			AtomicInteger idGenerator, List<CstNode> methods) {
+		if (elements.size() < 2) {
+			return;
+		}
+		Object nameNode = unwrapMetadata(elements.get(0));
+		if (!"symbol".equals(nodeType(nameNode))) {
+			return;
+		}
+		String name = string(nameNode);
+		String signature = signatureOnly ? "protocol-signature " + protocol + " " + name
+			: "implementation " + target + " " + protocol + " " + name;
+		if (signatureOnly) {
+			for (int i = 1; i < elements.size(); i++) {
+				Object parameterForm = elements.get(i);
+				if (!"vector".equals(tag(unwrapMetadata(parameterForm)))) {
+					break;
+				}
+				addMemberArity(form, parameterForm, parameterForm, Collections.emptyList(), name, signature,
+					true, namespace, sourceText, filePath, idGenerator, methods);
+			}
+		} else if ("vector".equals(tag(unwrapMetadata(elements.get(1))))) {
+			addMemberArity(form, null, elements.get(1), elements.subList(2, elements.size()), name, signature,
+				false, namespace, sourceText, filePath, idGenerator, methods);
+		} else if (allArities(elements.subList(1, elements.size()))) {
+			for (Object clause : elements.subList(1, elements.size())) {
+				List<Object> arity = semanticChildren(unwrapMetadata(clause));
+				addMemberArity(form, clause, arity.get(0), arity.subList(1, arity.size()), name, signature,
+					false, namespace, sourceText, filePath, idGenerator, methods);
+			}
+		}
+	}
+
+	private static void addMemberArity(Object form, Object clause, Object parameterForm, List<Object> body,
+			String name, String signature, boolean signatureOnly, String namespace, ClojureSourceText sourceText,
+			String filePath, AtomicInteger idGenerator, List<CstNode> methods) {
+		ParsedParameters parsed = parseParameters(unwrapMetadata(parameterForm), sourceText);
+		int parameterEnd = end(parameterForm, sourceText);
+		boolean hasBody = !body.isEmpty();
+		int bodyBegin = hasBody ? start(body.get(0), sourceText) : parameterEnd;
+		int bodyEnd = hasBody ? end(body.get(body.size() - 1), sourceText) : parameterEnd;
+		String localName = signature + "/" + parsed.fixedArity + (parsed.variadic ? "+" : "");
+		CstNode method = addNode(form, signatureOnly ? "ProtocolMethodSignature" : "MethodImplementation",
+			name, localName, parsed.parameters, bodyBegin, bodyEnd, hasBody, namespace,
+			sourceText, filePath, idGenerator, methods);
+		setAritySpan(method, start(clause == null ? parameterForm : clause, sourceText),
+			clause == null ? bodyEnd : end(clause, sourceText), sourceText);
 	}
 
 	private static void extractValueDeclaration(Object form, String head, String name, List<Object> elements,
@@ -326,14 +436,17 @@ final class ClojureDeclarationExtractor {
 
 		CstNode function = addNode(originalForm, type, simpleName, localName, parsedParameters.parameters,
 			bodyBegin, bodyEnd, true, namespace, sourceText, filePath, idGenerator, declarations);
-		Location declaration = function.getLocation();
 		int arityBegin = start(arityForm == null ? parameterForm : arityForm, sourceText);
 		int arityEnd = arityForm == null ? bodyEnd : end(arityForm, sourceText);
-		function.setLocation(new ClojureFunctionLocation(declaration,
-			sourceText.toOriginalOffset(arityBegin), sourceText.toOriginalOffset(arityEnd)));
+		setAritySpan(function, arityBegin, arityEnd, sourceText);
 		if (FUNCTION_TYPE.equals(type)) {
 			collectCalls(bodyNodes, function, parsedParameters.localNames, namespaceAliases, calls);
 		}
+	}
+
+	private static void setAritySpan(CstNode node, int begin, int end, ClojureSourceText sourceText) {
+		node.setLocation(new ClojureFunctionLocation(node.getLocation(),
+			sourceText.toOriginalOffset(begin), sourceText.toOriginalOffset(end)));
 	}
 
 	private static CstNode addNode(Object originalForm, String type, String simpleName, String localName,
