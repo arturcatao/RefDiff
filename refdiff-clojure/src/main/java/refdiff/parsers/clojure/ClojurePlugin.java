@@ -17,8 +17,8 @@ import refdiff.core.io.SourceFileSet;
 import refdiff.parsers.LanguagePlugin;
 
 /**
- * Clojure language plugin. It creates one CST node per source file and one
- * {@code FunctionDeclaration} node per {@code defn}/{@code defn-} arity.
+ * Clojure language plugin. It creates one CST node per source file and child
+ * nodes for supported top-level declarations.
  */
 public class ClojurePlugin implements LanguagePlugin {
 
@@ -40,11 +40,11 @@ public class ClojurePlugin implements LanguagePlugin {
 			CstNode fileNode = new CstNode(nextId.incrementAndGet());
 
 			List<TokenPosition> tokens;
-			List<CstNode> functions;
+			List<CstNode> declarations;
 			try {
 				tokens = tokenizer.tokenize(sourceText);
 				ClojureFileAnalysis analysis = declarationExtractor.analyze(sourceText, filePath, nextId);
-				functions = analysis.getFunctions();
+				declarations = analysis.getDeclarations();
 				calls.addAll(analysis.getCalls());
 			} catch (RuntimeException e) {
 				throw new RuntimeException("Error parsing " + sources.describeLocation(sourceFile) + ": " + e.getMessage(), e);
@@ -56,8 +56,8 @@ public class ClojurePlugin implements LanguagePlugin {
 			fileNode.setNamespace(namespace(filePath));
 			fileNode.setLocation(new Location(filePath, 0, sourceCode.length(), 1, 0, sourceCode.length()));
 			fileNode.addStereotypes(Stereotype.HAS_BODY);
-			for (CstNode function : functions) {
-				fileNode.addNode(function);
+			for (CstNode declaration : declarations) {
+				fileNode.addNode(declaration);
 			}
 			root.addNode(fileNode);
 			root.addTokenizedFile(new TokenizedSource(filePath, tokens));

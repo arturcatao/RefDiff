@@ -9,16 +9,16 @@ import refdiff.core.cst.CstNode;
  */
 final class ClojureFileAnalysis {
 
-	private final List<CstNode> functions;
+	private final List<CstNode> declarations;
 	private final List<ClojureCallSite> calls;
 
-	ClojureFileAnalysis(List<CstNode> functions, List<ClojureCallSite> calls) {
-		this.functions = functions;
+	ClojureFileAnalysis(List<CstNode> declarations, List<ClojureCallSite> calls) {
+		this.declarations = declarations;
 		this.calls = calls;
 	}
 
-	List<CstNode> getFunctions() {
-		return functions;
+	List<CstNode> getDeclarations() {
+		return declarations;
 	}
 
 	List<ClojureCallSite> getCalls() {

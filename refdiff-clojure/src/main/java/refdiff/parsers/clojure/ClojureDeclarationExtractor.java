@@ -21,10 +21,10 @@ import refdiff.core.cst.Parameter;
 import refdiff.core.cst.Stereotype;
 
 /**
- * Extracts {@code ns}, {@code defn}, and {@code defn-} declarations from the
+ * Extracts top-level declarations and reads namespace context from the
  * concrete syntax tree produced by rewrite-clj.
  *
- * <p>A multi-arity {@code defn} is represented by one node per arity. This
+ * <p>A callable with multiple arities is represented by one node per arity. This
  * keeps each body and parameter list unambiguous, which is required by
  * RefDiff's source-representation builder.
  */
@@ -47,7 +47,6 @@ final class ClojureDeclarationExtractor {
 
 	private static final Set<String> IGNORED_TAGS;
 	private static final Set<String> METADATA_TAGS;
-	private static final Set<String> DEFINITION_HEADS;
 	private static final Set<String> LET_FORMS;
 	private static final Set<String> FN_FORMS;
 	private static final Set<String> SPECIAL_FORMS;
@@ -74,10 +73,6 @@ final class ClojureDeclarationExtractor {
 		Set<String> metadataTags = new HashSet<>();
 		Collections.addAll(metadataTags, "meta", "meta*");
 		METADATA_TAGS = Collections.unmodifiableSet(metadataTags);
-
-		Set<String> definitionHeads = new HashSet<>();
-		Collections.addAll(definitionHeads, "defn", "defn-");
-		DEFINITION_HEADS = Collections.unmodifiableSet(definitionHeads);
 
 		Set<String> letForms = new HashSet<>();
 		Collections.addAll(letForms, "let", "let*", "loop", "loop*");
@@ -113,22 +108,44 @@ final class ClojureDeclarationExtractor {
 			? ""
 			: clojureNamespace + ".";
 
-		List<CstNode> functions = new ArrayList<>();
+		List<CstNode> declarations = new ArrayList<>();
 		List<ClojureCallSite> calls = new ArrayList<>();
 		for (Object form : forms) {
 			Object declaration = unwrapMetadata(form);
+			if (!"list".equals(tag(declaration))) {
+				continue;
+			}
 			List<Object> elements = semanticChildren(declaration);
-			if (elements.isEmpty()) {
+			if (elements.size() < 2) {
+				continue;
+			}
+			Object name = unwrapMetadata(elements.get(1));
+			if (!"symbol".equals(nodeType(name))) {
 				continue;
 			}
 
 			String head = tokenString(elements.get(0));
-			if (DEFINITION_HEADS.contains(head)) {
-				extractFunctions(form, declaration, elements, functionNamespace, namespaceInfo.aliases,
-					sourceText, filePath, idGenerator, functions, calls);
+			if (head == null) {
+				continue;
+			}
+			switch (head) {
+			case "defn":
+			case "defn-":
+			case "defmacro":
+			case "defmethod":
+				extractCallable(form, head, string(name), elements, functionNamespace, namespaceInfo.aliases,
+					sourceText, filePath, idGenerator, declarations, calls);
+				break;
+			case "def":
+			case "defmulti":
+				extractValueDeclaration(form, head, string(name), elements, functionNamespace, sourceText,
+					filePath, idGenerator, declarations);
+				break;
+			default:
+				break;
 			}
 		}
-		return new ClojureFileAnalysis(functions, calls);
+		return new ClojureFileAnalysis(declarations, calls);
 	}
 
 	private static NamespaceInfo findNamespace(List<Object> forms) {
@@ -193,52 +210,85 @@ final class ClojureDeclarationExtractor {
 		}
 	}
 
-	private static void extractFunctions(Object originalForm, Object declaration, List<Object> elements,
+	private static void extractValueDeclaration(Object form, String head, String name, List<Object> elements,
+			String namespace, ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator,
+			List<CstNode> declarations) {
+		int next = 2;
+		// A lone string in a def is the initializer.
+		if (elements.size() > next + 1 && isStringNode(elements.get(next))) {
+			next++;
+		}
+		boolean multimethod = "defmulti".equals(head);
+		if (multimethod && elements.size() > next + 1 && "map".equals(tag(elements.get(next)))) {
+			next++;
+		}
+		boolean hasBody = next < elements.size();
+		if ((!hasBody && multimethod) || (!multimethod && elements.size() > next + 1)) {
+			return;
+		}
+		int bodyBegin = hasBody ? start(elements.get(next), sourceText) : end(elements.get(1), sourceText);
+		int bodyEnd = hasBody ? end(elements.get(elements.size() - 1), sourceText) : bodyBegin;
+		addNode(form, multimethod ? "MultimethodDeclaration" : "VarDeclaration", name, head + " " + name,
+			Collections.emptyList(), bodyBegin, bodyEnd, hasBody, namespace, sourceText, filePath,
+			idGenerator, declarations);
+	}
+
+	private static void extractCallable(Object originalForm, String head, String name, List<Object> elements,
 			String namespace, Map<String, String> namespaceAliases, ClojureSourceText sourceText,
-			String filePath, AtomicInteger idGenerator, List<CstNode> functions, List<ClojureCallSite> calls) {
-		if (elements.size() < 2) {
-			return;
-		}
-
-		Object nameNode = unwrapMetadata(elements.get(1));
-		String simpleName = tokenString(nameNode);
-		if (simpleName == null || simpleName.isEmpty()) {
-			return;
-		}
-
+			String filePath, AtomicInteger idGenerator, List<CstNode> declarations, List<ClojureCallSite> calls) {
+		String type = FUNCTION_TYPE;
+		String signature = name;
 		int next = 2;
 		Object lastHeaderNode = elements.get(1);
-		if (next < elements.size() && isStringNode(elements.get(next))) {
-			lastHeaderNode = elements.get(next);
-			next++;
-		}
-		if (next < elements.size() && "map".equals(tag(elements.get(next)))) {
-			lastHeaderNode = elements.get(next);
-			next++;
+		if ("defmethod".equals(head)) {
+			if (elements.size() < 4) {
+				return;
+			}
+			Object dispatch = elements.get(next++);
+			type = "MethodDeclaration";
+			signature = head + " " + name + " " + sourceText.originalSlice(
+				start(dispatch, sourceText), end(dispatch, sourceText));
+		} else {
+			if ("defmacro".equals(head)) {
+				type = "MacroDeclaration";
+				signature = head + " " + name;
+			}
+			if (next < elements.size() && isStringNode(elements.get(next))) {
+				lastHeaderNode = elements.get(next++);
+			}
+			if (next < elements.size() && "map".equals(tag(elements.get(next)))) {
+				lastHeaderNode = elements.get(next++);
+			}
 		}
 
 		List<Object> tail = elements.subList(next, elements.size());
 		if (tail.isEmpty()) {
-			int bodyPosition = end(lastHeaderNode, sourceText);
-			addFunctionNode(originalForm, simpleName, 0, false, Collections.emptyList(),
-				bodyPosition, bodyPosition, namespace, sourceText, filePath, idGenerator, functions);
+			if (FUNCTION_TYPE.equals(type)) {
+				int bodyPosition = end(lastHeaderNode, sourceText);
+				addNode(originalForm, type, name, name + "/0", Collections.emptyList(), bodyPosition,
+					bodyPosition, true, namespace, sourceText, filePath, idGenerator, declarations);
+			}
 			return;
 		}
 
 		Object first = unwrapMetadata(tail.get(0));
 		if ("vector".equals(tag(first))) {
-			addFunctionNode(originalForm, simpleName, null, tail.get(0), tail.subList(1, tail.size()),
-				namespace, namespaceAliases, sourceText, filePath, idGenerator, functions, calls);
+			addFunctionNode(originalForm, type, name, signature, null, tail.get(0), tail.subList(1, tail.size()),
+				namespace, namespaceAliases, sourceText, filePath, idGenerator, declarations, calls);
 			return;
 		}
 
-		if ("list".equals(tag(first)) && allArities(tail)) {
-			for (Object tailNode : tail) {
-				Object arityForm = unwrapMetadata(tailNode);
-				List<Object> arityElements = semanticChildren(arityForm);
-				addFunctionNode(originalForm, simpleName, tailNode, arityElements.get(0),
-					arityElements.subList(1, arityElements.size()), namespace, namespaceAliases,
-					sourceText, filePath, idGenerator, functions, calls);
+		if ("list".equals(tag(first))) {
+			if ("defmacro".equals(head) && "map".equals(tag(tail.get(tail.size() - 1)))) {
+				tail = tail.subList(0, tail.size() - 1);
+			}
+			if (allArities(tail)) {
+				for (Object arityForm : tail) {
+					List<Object> arityElements = semanticChildren(unwrapMetadata(arityForm));
+					addFunctionNode(originalForm, type, name, signature, arityForm, arityElements.get(0),
+						arityElements.subList(1, arityElements.size()), namespace, namespaceAliases,
+						sourceText, filePath, idGenerator, declarations, calls);
+				}
 			}
 		}
 	}
@@ -257,15 +307,15 @@ final class ClojureDeclarationExtractor {
 		return true;
 	}
 
-	private static void addFunctionNode(Object originalForm, String simpleName, Object arityForm,
-			Object parameterForm,
+	private static void addFunctionNode(Object originalForm, String type, String simpleName,
+			String signature, Object arityForm, Object parameterForm,
 			List<Object> bodyNodes, String namespace, Map<String, String> namespaceAliases,
 			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator,
-			List<CstNode> functions, List<ClojureCallSite> calls) {
+			List<CstNode> declarations, List<ClojureCallSite> calls) {
 		Object parameters = unwrapMetadata(parameterForm);
 		ParsedParameters parsedParameters = parseParameters(parameters, sourceText);
 		int arity = parsedParameters.fixedArity;
-		String localName = simpleName + "/" + arity + (parsedParameters.variadic ? "+" : "");
+		String localName = signature + "/" + arity + (parsedParameters.variadic ? "+" : "");
 
 		int bodyBegin = bodyNodes.isEmpty()
 			? end(parameters, sourceText)
@@ -274,41 +324,37 @@ final class ClojureDeclarationExtractor {
 			? end(parameters, sourceText)
 			: end(bodyNodes.get(bodyNodes.size() - 1), sourceText);
 
-		CstNode function = addNode(originalForm, simpleName, localName, parsedParameters.parameters,
-			bodyBegin, bodyEnd, namespace, sourceText, filePath, idGenerator, functions);
+		CstNode function = addNode(originalForm, type, simpleName, localName, parsedParameters.parameters,
+			bodyBegin, bodyEnd, true, namespace, sourceText, filePath, idGenerator, declarations);
 		Location declaration = function.getLocation();
 		int arityBegin = start(arityForm == null ? parameterForm : arityForm, sourceText);
 		int arityEnd = arityForm == null ? bodyEnd : end(arityForm, sourceText);
 		function.setLocation(new ClojureFunctionLocation(declaration,
 			sourceText.toOriginalOffset(arityBegin), sourceText.toOriginalOffset(arityEnd)));
-		collectCalls(bodyNodes, function, parsedParameters.localNames, namespaceAliases, calls);
+		if (FUNCTION_TYPE.equals(type)) {
+			collectCalls(bodyNodes, function, parsedParameters.localNames, namespaceAliases, calls);
+		}
 	}
 
-	private static void addFunctionNode(Object originalForm, String simpleName, int arity, boolean variadic,
-			List<Parameter> parameters, int bodyBegin, int bodyEnd, String namespace,
-			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator, List<CstNode> functions) {
-		String localName = simpleName + "/" + arity + (variadic ? "+" : "");
-		addNode(originalForm, simpleName, localName, parameters, bodyBegin, bodyEnd, namespace, sourceText,
-			filePath, idGenerator, functions);
-	}
-
-	private static CstNode addNode(Object originalForm, String simpleName, String localName,
-			List<Parameter> parameters, int normalizedBodyBegin, int normalizedBodyEnd, String namespace,
-			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator, List<CstNode> functions) {
+	private static CstNode addNode(Object originalForm, String type, String simpleName, String localName,
+			List<Parameter> parameters, int normalizedBodyBegin, int normalizedBodyEnd, boolean hasBody, String namespace,
+			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator, List<CstNode> declarations) {
 		int begin = sourceText.toOriginalOffset(start(originalForm, sourceText));
 		int end = sourceText.toOriginalOffset(end(originalForm, sourceText));
 		int bodyBegin = sourceText.toOriginalOffset(normalizedBodyBegin);
 		int bodyEnd = sourceText.toOriginalOffset(normalizedBodyEnd);
 
 		CstNode node = new CstNode(idGenerator.incrementAndGet());
-		node.setType(FUNCTION_TYPE);
+		node.setType(type);
 		node.setSimpleName(simpleName);
 		node.setLocalName(localName);
 		node.setNamespace(namespace);
 		node.setParameters(parameters);
 		node.setLocation(new Location(filePath, begin, end, sourceText.lineNumber(begin), bodyBegin, bodyEnd));
-		node.addStereotypes(Stereotype.HAS_BODY);
-		functions.add(node);
+		if (hasBody) {
+			node.addStereotypes(Stereotype.HAS_BODY);
+		}
+		declarations.add(node);
 		return node;
 	}
 

@@ -40,6 +40,64 @@ public class ClojurePluginTest {
 	private final ClojurePlugin plugin = new ClojurePlugin();
 
 	@Test
+	public void shouldExtractTopLevelDeclarationsWithDistinctTypesAndSpans() throws Exception {
+		String source = "(ns demo)\n"
+			+ "(def greeting \"hello\")\n"
+			+ "(def ^:private callback \"doc\" (fn [x] x))\n"
+			+ "(def unbound)\n"
+			+ "(defmacro emit ([x] x) ([x y] y))\n"
+			+ "(defmulti render \"doc\" :kind)\n"
+			+ "(defmethod render :item [x] (str x))\n"
+			+ "(defmethod render \":item\" [x] x)\n"
+			+ "; (def commented 1)\n"
+			+ "#_(def discarded 1)\n"
+			+ "'(def quoted 1)\n"
+			+ "[def vector-data 1]\n"
+			+ "(comment (def nested 1))\n";
+		CstNode file = plugin.parse(writeSource("declarations", source)).getNodes().get(0);
+		assertEquals(8, file.getNodes().size());
+		CstNode greeting = functionByLocalName(file, "def greeting");
+		assertEquals("VarDeclaration", greeting.getType());
+		assertFunctionBody(source, greeting, "\"hello\"");
+		assertFunctionBody(source, functionByLocalName(file, "def callback"), "(fn [x] x)");
+		assertFalse(functionByLocalName(file, "def unbound").hasStereotype(Stereotype.HAS_BODY));
+		CstNode macro = functionByLocalName(file, "defmacro emit/2");
+		assertEquals("MacroDeclaration", macro.getType());
+		assertAritySpan(source, macro, "([x y] y)");
+		CstNode multi = functionByLocalName(file, "defmulti render");
+		assertEquals("MultimethodDeclaration", multi.getType());
+		assertFunctionBody(source, multi, ":kind");
+		CstNode method = functionByLocalName(file, "defmethod render :item/1");
+		assertEquals("MethodDeclaration", method.getType());
+		assertEquals("demo.", method.getNamespace());
+		assertFunctionBody(source, method, "(str x)");
+		assertAritySpan(source, method, "[x] (str x)");
+		assertEquals("MethodDeclaration", functionByLocalName(file, "defmethod render \":item\"/1").getType());
+	}
+
+	@Test
+	public void shouldPairMethodsByDispatchWhenReorderedAndEdited() throws Exception {
+		String header = "(ns demo)\n(defmulti render :kind)\n";
+		String before = header + "(defmethod render :a [x] (inc x))\n(defmethod render :b [x] (dec x))\n";
+		String after = header + "(defmethod render :b [x] (dec x))\n(defmethod render :a [x] (+ x 2))\n";
+		CstDiff diff = new CstComparator(plugin).compare(writeSource("before", before), writeSource("after", after));
+		assertEquals(2, diff.getRelationships().stream().filter(relationship -> {
+			CstNode oldNode = relationship.getNodeBefore();
+			CstNode newNode = relationship.getNodeAfter();
+			return relationship.getType() == RelationshipType.SAME
+				&& "MethodDeclaration".equals(oldNode.getType())
+				&& oldNode.getLocalName().equals(newNode.getLocalName());
+		}).count());
+		assertTrue(diff.getRefactoringRelationships().isEmpty());
+	}
+
+	private SourceFolder writeSource(String directoryName, String source) throws Exception {
+		Path directory = temporaryFolder.newFolder(directoryName).toPath();
+		Files.write(directory.resolve("a.clj"), source.getBytes(StandardCharsets.UTF_8));
+		return SourceFolder.from(directory, Paths.get("a.clj"));
+	}
+
+	@Test
 	public void shouldParseClojureFile() throws Exception {
 		Path basePath = Paths.get("test-data/parser/clojure");
 		SourceFolder sources = SourceFolder.from(basePath, Paths.get("simple.clj"));
