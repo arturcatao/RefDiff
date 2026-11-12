@@ -170,6 +170,44 @@ Quando solicitado a auditar ou avaliar o plugin, produza um relatório Markdown 
 
 Sempre que possível, cite caminhos, classes, métodos, testes e linhas de código. Marque como “não verificado” tudo que não puder ser confirmado. Separe fatos observados, inferências e recomendações.
 
-## 9. Princípio geral
+## 9. Prioridade atual — namespace e associação de smells
+
+O trabalho prioritário agora é representar `ns` na árvore e validar a associação de ocorrências da categoria **Module Boundaries & Data Contracts**, antes de continuar a expansão para funções locais.
+
+### Evidência e limite da investigação
+
+- Nos gráficos do lote apresentados pelo usuário, as 1.229 ocorrências de `excessive-refers` aparecem sem entidade elegível.
+- O catálogo da pipeline classifica essa regra em Module Boundaries & Data Contracts. O ARIT registra sua localização na forma `ns`.
+- O plugin atualmente lê nome e aliases de `ns` como contexto, mas não cria uma entidade para essa declaração.
+- A pipeline exige associação `matched` e igualdade entre o ID da entidade selecionada e o ID anterior da refatoração para produzir um vínculo direto.
+- Os artefatos completos do lote ainda precisam ser conferidos para determinar os motivos individuais das associações malsucedidas. Zero vínculos diretos não permite concluir que os respectivos commits tiveram zero refatorações detectadas.
+
+### Etapa 1 — extrair NamespaceDeclaration
+
+- [ ] Criar um nó `NamespaceDeclaration` para cada forma `ns` de nível superior reconhecida, com nome, arquivo e intervalo completo da declaração.
+- [ ] Colocar o nó como filho de `File`, ao lado das funções e tipos. Preservar o contexto de namespace e aliases usado pelas entidades existentes.
+- [ ] Definir uma assinatura local que distinga o namespace dos outros tipos de declaração e conferir sua serialização no runner JSON.
+- [ ] Cobrir docstrings, metadados, comentários, arquivo sem `ns`, formas citadas e formas descartadas por `#_`.
+- [ ] Verificar intervalos com LF, CRLF e Unicode, em offsets UTF-16 com fim exclusivo.
+- [ ] Comparar versões com edição apenas em `:require`, renomeação de namespace e declarações concorrentes. Conferir o pareamento do namespace e das funções existentes, incluindo ausência de relações espúrias.
+- [ ] Executar os testes específicos do módulo e os compartilhados relevantes, registrar os resultados e fazer um commit da etapa.
+
+### Etapa 2 — validar a integração com a pipeline
+
+- [ ] Atualizar a cópia do RefDiff usada pela pipeline e registrar a revisão utilizada.
+- [ ] Usar uma fixture com finding `excessive-refers` localizado em `ns` e verificar que o associador seleciona `NamespaceDeclaration`, com evidência de contenção do intervalo.
+- [ ] Reprocessar os casos dessa regra no lote quando os artefatos estiverem disponíveis, comparando os motivos de associação antes e depois.
+- [ ] Contar separadamente ocorrências associadas, ocorrências com vínculo direto e refatorações detectadas nos commits que contêm essas ocorrências.
+- [ ] Registrar casos que continuarem sem entidade ou ambíguos e fazer um commit das alterações de integração no repositório correspondente.
+
+### Etapa 3 — representar cláusulas de dependência
+
+- [ ] Definir e implementar a representação de `:require`, `:require-macros` e `:use`, com intervalos próprios e vínculo explícito à declaração `ns`.
+- [ ] Testar a seleção da entidade quando os intervalos da cláusula e de `ns` contêm a mesma ocorrência.
+- [ ] Avaliar edições em `:refer` e aliases com fixtures antes de afirmar suporte a uma refatoração específica.
+- [ ] Usar o diff para investigar mudanças que permaneçam pareadas como `SAME`. Manter transformação observada e resultado posterior do smell em campos distintos.
+- [ ] Executar os testes pertinentes, registrar limitações e fazer um commit da etapa.
+
+## 10. Princípio geral
 
 O critério de sucesso não é maximizar a quantidade de refatorações reportadas. É produzir resultados rastreáveis, reproduzíveis e suficientemente precisos para apoiar uma análise acadêmica, deixando claras as limitações e os casos que exigem revisão manual.
