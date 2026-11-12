@@ -178,19 +178,21 @@ O trabalho prioritário agora é representar `ns` na árvore e validar a associa
 
 - Nos gráficos do lote apresentados pelo usuário, as 1.229 ocorrências de `excessive-refers` aparecem sem entidade elegível.
 - O catálogo da pipeline classifica essa regra em Module Boundaries & Data Contracts. O ARIT registra sua localização na forma `ns`.
-- O plugin atualmente lê nome e aliases de `ns` como contexto, mas não cria uma entidade para essa declaração.
+- Na investigação inicial, o plugin lia nome e aliases de `ns` como contexto, sem criar uma entidade para essa declaração. A etapa 1 abaixo acrescenta essa entidade.
 - A pipeline exige associação `matched` e igualdade entre o ID da entidade selecionada e o ID anterior da refatoração para produzir um vínculo direto.
 - Os artefatos completos do lote ainda precisam ser conferidos para determinar os motivos individuais das associações malsucedidas. Zero vínculos diretos não permite concluir que os respectivos commits tiveram zero refatorações detectadas.
 
 ### Etapa 1 — extrair NamespaceDeclaration
 
-- [ ] Criar um nó `NamespaceDeclaration` para cada forma `ns` de nível superior reconhecida, com nome, arquivo e intervalo completo da declaração.
-- [ ] Colocar o nó como filho de `File`, ao lado das funções e tipos. Preservar o contexto de namespace e aliases usado pelas entidades existentes.
-- [ ] Definir uma assinatura local que distinga o namespace dos outros tipos de declaração e conferir sua serialização no runner JSON.
-- [ ] Cobrir docstrings, metadados, comentários, arquivo sem `ns`, formas citadas e formas descartadas por `#_`.
-- [ ] Verificar intervalos com LF, CRLF e Unicode, em offsets UTF-16 com fim exclusivo.
-- [ ] Comparar versões com edição apenas em `:require`, renomeação de namespace e declarações concorrentes. Conferir o pareamento do namespace e das funções existentes, incluindo ausência de relações espúrias.
-- [ ] Executar os testes específicos do módulo e os compartilhados relevantes, registrar os resultados e fazer um commit da etapa.
+- [x] Criar um nó `NamespaceDeclaration` para cada forma `ns` de nível superior reconhecida, com nome, arquivo e intervalo completo da declaração.
+- [x] Colocar o nó como filho de `File`, ao lado das funções e tipos. Preservar o contexto de namespace e aliases usado pelas entidades existentes.
+- [x] Definir uma assinatura local que distinga o namespace dos outros tipos de declaração e conferir sua serialização no runner JSON.
+- [x] Cobrir docstrings, metadados, comentários, arquivo sem `ns`, formas citadas e formas descartadas por `#_`.
+- [x] Verificar intervalos com LF, CRLF e Unicode, em offsets UTF-16 com fim exclusivo.
+- [x] Comparar versões com edição apenas em `:require`, renomeação de namespace e declarações concorrentes. Conferir o pareamento do namespace e das funções existentes, incluindo ausência de relações espúrias.
+- [x] Executar os testes específicos do módulo e os compartilhados relevantes, registrar os resultados e fazer um commit da etapa.
+
+Validação da etapa 1 em 12/11/2026. Compilação direta com `javac -proc:none` e dependências locais, seguida de `org.junit.runner.JUnitCore`: 43 testes do plugin e 15 testes do núcleo aprovados. O teste de serialização usa o mesmo método de entidades chamado pelo runner JSON. A validação de associação com ARIT e do lote pertence à etapa 2.
 
 ### Etapa 2 — validar a integração com a pipeline
 

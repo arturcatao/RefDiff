@@ -55,7 +55,7 @@ public class ClojurePluginTest {
 			+ "[def vector-data 1]\n"
 			+ "(comment (def nested 1))\n";
 		CstNode file = plugin.parse(writeSource("declarations", source)).getNodes().get(0);
-		assertEquals(8, file.getNodes().size());
+		assertEquals(9, file.getNodes().size());
 		CstNode greeting = functionByLocalName(file, "def greeting");
 		assertEquals("VarDeclaration", greeting.getType());
 		assertFunctionBody(source, greeting, "\"hello\"");
@@ -101,7 +101,7 @@ public class ClojurePluginTest {
 			+ "(extend-protocol P nil (m [this] :nil) Long (m [this] this))\n"
 			+ "(extend-type nil P (m [this] :nil))\n";
 		CstNode file = plugin.parse(writeSource("members", source)).getNodes().get(0);
-		assertEquals(6, file.getNodes().size());
+		assertEquals(7, file.getNodes().size());
 
 		CstNode protocol = functionByLocalName(file, "defprotocol P");
 		assertEquals("ProtocolDeclaration", protocol.getType());
@@ -224,7 +224,8 @@ public class ClojurePluginTest {
 
 		CstRoot root = plugin.parse(sources);
 		CstNode fileNode = root.getNodes().get(0);
-		List<CstNode> functions = fileNode.getNodes();
+		List<CstNode> functions = fileNode.getNodes().stream()
+			.filter(node -> "FunctionDeclaration".equals(node.getType())).collect(Collectors.toList());
 
 		assertEquals(10, functions.size());
 		assertEquals(Arrays.asList("greet/1", "hidden/1", "multi/1", "multi/2", "multi/2+",
@@ -303,7 +304,8 @@ public class ClojurePluginTest {
 		CstRoot root = plugin.parse(sources);
 
 		assertEquals(1, root.getNodes().size());
-		assertTrue(root.getNodes().get(0).getNodes().isEmpty());
+		assertEquals("NamespaceDeclaration", root.getNodes().get(0).getNodes().get(0).getType());
+		assertEquals(1, root.getNodes().get(0).getNodes().size());
 		assertNotNull(root.getTokenizedSource().get("namespace_only.clj"));
 	}
 
@@ -337,7 +339,7 @@ public class ClojurePluginTest {
 			SourceFolder sources = SourceFolder.from(directory, Paths.get("a.clj"));
 
 			CstRoot root = plugin.parse(sources);
-			CstNode function = root.getNodes().get(0).getNodes().get(0);
+			CstNode function = functionByLocalName(root.getNodes().get(0), "f/1");
 
 			assertEquals("demo.core.", function.getNamespace());
 			assertEquals(source.indexOf("(defn f"), function.getLocation().getBegin());

@@ -127,6 +127,13 @@ final class ClojureDeclarationExtractor {
 				continue;
 			}
 			switch (head) {
+			case "ns":
+				int bodyBegin = end(elements.get(1), sourceText);
+				int bodyEnd = elements.size() > 2 ? end(elements.get(elements.size() - 1), sourceText) : bodyBegin;
+				addNode(form, "NamespaceDeclaration", string(name), "ns " + string(name),
+					Collections.emptyList(), bodyBegin, bodyEnd, elements.size() > 2, "",
+					sourceText, filePath, idGenerator, declarations);
+				break;
 			case "defn":
 			case "defn-":
 			case "defmacro":
@@ -157,12 +164,18 @@ final class ClojureDeclarationExtractor {
 	private static NamespaceInfo findNamespace(List<Object> forms) {
 		for (Object form : forms) {
 			Object declaration = unwrapMetadata(form);
+			if (!"list".equals(tag(declaration))) {
+				continue;
+			}
 			List<Object> elements = semanticChildren(declaration);
 			if (elements.size() < 2) {
 				continue;
 			}
 			if ("ns".equals(tokenString(elements.get(0)))) {
 				Object nameNode = unwrapMetadata(elements.get(1));
+				if (!"symbol".equals(nodeType(nameNode))) {
+					continue;
+				}
 				String name = tokenString(nameNode);
 				Map<String, String> aliases = new HashMap<>();
 				collectNamespaceAliases(elements, aliases);

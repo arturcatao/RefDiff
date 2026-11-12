@@ -29,6 +29,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("renameFunction", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.rename"), node("a.clj", "ns demo.rename")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME,
 				node("a.clj", "demo.rename.keep/1"),
@@ -45,6 +46,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("ambiguousRename", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.ambiguous"), node("a.clj", "ns demo.ambiguous")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj"))
 		));
 	}
@@ -55,6 +57,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("differentBodyRename", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.different"), node("a.clj", "ns demo.different")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME,
 				node("a.clj", "demo.different.keep-a/1"),
@@ -77,6 +80,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("multiArityRename", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.multi"), node("a.clj", "ns demo.multi")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME,
 				node("a.clj", "demo.multi.keep-a/1"),
@@ -105,6 +109,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("trivialBodyRename", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.trivial"), node("a.clj", "ns demo.trivial")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME,
 				node("a.clj", "demo.trivial.keep-a/1"),
@@ -127,6 +132,8 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("moveFunctionFile", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.move"), node("a.clj", "ns demo.move")),
+			relationship(RelationshipType.SAME, node("b.clj", "ns demo.move"), node("b.clj", "ns demo.move")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME, node("b.clj"), node("b.clj")),
 			relationship(RelationshipType.SAME,
@@ -144,6 +151,8 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("moveFunctionNamespace", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.ns.a"), node("a.clj", "ns demo.ns.a")),
+			relationship(RelationshipType.SAME, node("b.clj", "ns demo.ns.b"), node("b.clj", "ns demo.ns.b")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME, node("b.clj"), node("b.clj")),
 			relationship(RelationshipType.MOVE,
@@ -158,6 +167,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("changeArity", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.arity"), node("a.clj", "ns demo.arity")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.CHANGE_SIGNATURE,
 				node("a.clj", "demo.arity.add/1"),
@@ -171,6 +181,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("extractFunction", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.extract"), node("a.clj", "ns demo.extract")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME,
 				node("a.clj", "demo.extract.caller/1"),
@@ -187,6 +198,7 @@ public class ClojureRefactoringDetectionTest {
 		printDiff("inlineFunction", diff);
 
 		assertThat(diff, containsOnly(
+			relationship(RelationshipType.SAME, node("a.clj", "ns demo.inline"), node("a.clj", "ns demo.inline")),
 			relationship(RelationshipType.SAME, node("a.clj"), node("a.clj")),
 			relationship(RelationshipType.SAME,
 				node("a.clj", "demo.inline.caller/1"),
