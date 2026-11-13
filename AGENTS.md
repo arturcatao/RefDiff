@@ -204,11 +204,17 @@ Validação da etapa 1 em 12/11/2026. Compilação direta com `javac -proc:none`
 
 ### Etapa 3 — representar cláusulas de dependência
 
-- [ ] Definir e implementar a representação de `:require`, `:require-macros` e `:use`, com intervalos próprios e vínculo explícito à declaração `ns`.
-- [ ] Testar a seleção da entidade quando os intervalos da cláusula e de `ns` contêm a mesma ocorrência.
-- [ ] Avaliar edições em `:refer` e aliases com fixtures antes de afirmar suporte a uma refatoração específica.
-- [ ] Usar o diff para investigar mudanças que permaneçam pareadas como `SAME`. Manter transformação observada e resultado posterior do smell em campos distintos.
-- [ ] Executar os testes pertinentes, registrar limitações e fazer um commit da etapa.
+- [x] Definir e implementar a representação de `:require`, `:require-macros` e `:use`, com intervalos próprios e vínculo explícito à declaração `ns`.
+- [x] Testar a seleção da entidade quando os intervalos da cláusula e de `ns` contêm a mesma ocorrência.
+- [x] Avaliar edições em `:refer` e aliases com fixtures antes de afirmar suporte a uma refatoração específica.
+- [x] Conferir em fixtures que edições de `:refer` e aliases permanecem pareadas como `SAME`, documentando a transformação textual observada. A classificação de estratégia e resultado posterior do smell continua sendo responsabilidade da integração com a pipeline.
+- [x] Executar os testes pertinentes, registrar limitações e fazer um commit da etapa.
+
+Validação da etapa 3 em 13/11/2026. Compilação direta com `javac -proc:none` e execução com `org.junit.runner.JUnitCore`: 46 testes do plugin e 15 do núcleo aprovados. O JSON exporta `RequireClause`, `RequireMacrosClause` e `UseClause` com `parent_id` do namespace. Os testes cobrem intervalos LF/CRLF e Unicode, formulários descartados, reordenação de tipos de cláusula, alterações de aliases e cláusulas repetidas.
+
+Uma instrumentação temporária serializou entidades do plugin e chamou `_build_entity` e `_decide` do associador local em dois cenários. Com namespace e cláusula em linhas distintas, selecionou `RequireClause` como entidade estritamente interna. Na mesma linha, registrou `ambiguous` com `boundary_line_shared_by_sibling_declarations`. Esse teste não reprocessa o lote nem executa ARIT.
+
+Limitações da etapa 3. Cláusulas repetidas do mesmo tipo usam assinatura ordinal local (por exemplo, `:require#1`), portanto sua reordenação pode alterar a correspondência de identidade. Extração se limita às cláusulas diretas da forma `ns`; reader conditionals continuam pendentes. A avaliação do resultado do smell e a investigação do diff nos casos reais permanecem na pipeline.
 
 ## 10. Princípio geral
 

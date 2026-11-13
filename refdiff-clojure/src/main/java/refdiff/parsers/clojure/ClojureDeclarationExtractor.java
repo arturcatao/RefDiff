@@ -130,9 +130,10 @@ final class ClojureDeclarationExtractor {
 			case "ns":
 				int bodyBegin = end(elements.get(1), sourceText);
 				int bodyEnd = elements.size() > 2 ? end(elements.get(elements.size() - 1), sourceText) : bodyBegin;
-				addNode(form, "NamespaceDeclaration", string(name), "ns " + string(name),
+				CstNode namespaceNode = addNode(form, "NamespaceDeclaration", string(name), "ns " + string(name),
 					Collections.emptyList(), bodyBegin, bodyEnd, elements.size() > 2, "",
 					sourceText, filePath, idGenerator, declarations);
+				extractDependencyClauses(namespaceNode, elements, sourceText, filePath, idGenerator);
 				break;
 			case "defn":
 			case "defn-":
@@ -159,6 +160,49 @@ final class ClojureDeclarationExtractor {
 			}
 		}
 		return new ClojureFileAnalysis(declarations, calls);
+	}
+
+	private static void extractDependencyClauses(CstNode namespaceNode, List<Object> elements,
+			ClojureSourceText sourceText, String filePath, AtomicInteger idGenerator) {
+		Map<String, Integer> occurrences = new HashMap<>();
+		List<CstNode> clauses = new ArrayList<>();
+		for (int i = 2; i < elements.size(); i++) {
+			Object form = elements.get(i);
+			Object value = unwrapMetadata(form);
+			if (!"list".equals(tag(value))) {
+				continue;
+			}
+			List<Object> parts = semanticChildren(value);
+			if (parts.isEmpty()) {
+				continue;
+			}
+			String head = keywordText(parts.get(0));
+			if (head == null) {
+				continue;
+			}
+			String type;
+			switch (head) {
+			case ":require":
+				type = "RequireClause";
+				break;
+			case ":require-macros":
+				type = "RequireMacrosClause";
+				break;
+			case ":use":
+				type = "UseClause";
+				break;
+			default:
+				continue;
+			}
+			// Repeated clauses remain distinct. Their ordinal is local to the clause kind.
+			int occurrence = occurrences.merge(head, 1, Integer::sum);
+			String signature = head + "#" + occurrence;
+			int bodyBegin = end(parts.get(0), sourceText);
+			int bodyEnd = parts.size() > 1 ? end(parts.get(parts.size() - 1), sourceText) : bodyBegin;
+			addNode(form, type, head, signature, Collections.emptyList(), bodyBegin, bodyEnd,
+				parts.size() > 1, "", sourceText, filePath, idGenerator, clauses);
+		}
+		clauses.forEach(namespaceNode::addNode);
 	}
 
 	private static NamespaceInfo findNamespace(List<Object> forms) {

@@ -89,7 +89,7 @@ public class ClojureNamespaceTest {
 	public void shouldKeepMatchesWhenOnlyRequiresChange() throws Exception {
 		CstDiff diff = compare("(ns demo (:require [lib.core :refer [a b c]]))\n(defn f [x] (inc x))",
 			"(ns demo (:require [lib.core :as lib]))\n(defn f [x] (inc x))");
-		assertEquals(3, diff.getRelationships().size());
+		assertEquals(4, diff.getRelationships().size());
 		assertTrue(diff.getRelationships().stream().allMatch(r -> r.getType() == RelationshipType.SAME));
 		assertTrue(diff.getRefactoringRelationships().isEmpty());
 	}
@@ -98,7 +98,7 @@ public class ClojureNamespaceTest {
 	public void shouldRenameNamespaceWithoutReparentingFunctions() throws Exception {
 		String tail = " (:require [lib.core :as lib] [other.core :refer [helper]]))\n(defn f [x] (inc x))";
 		CstDiff diff = compare("(ns old.name" + tail, "(ns new.name" + tail);
-		assertEquals(3, diff.getRelationships().size());
+		assertEquals(4, diff.getRelationships().size());
 		assertEquals(1, diff.getRefactoringRelationships().size());
 		assertEquals("NamespaceDeclaration", diff.getRefactoringRelationships().iterator().next().getNodeBefore().getType());
 		assertEquals(RelationshipType.RENAME, diff.getRefactoringRelationships().iterator().next().getType());
@@ -124,6 +124,54 @@ public class ClojureNamespaceTest {
 		assertEquals(1, diff.getRelationships().size());
 		assertEquals("File", diff.getRelationships().iterator().next().getNodeBefore().getType());
 		assertTrue(diff.getRefactoringRelationships().isEmpty());
+	}
+
+	@Test
+	public void shouldExtractDependencyClauseSpansAndParents() throws Exception {
+		for (String newline : new String[] {"\n", "\r\n"}) {
+			String require = "(:require [lib.core :refer [a b]])";
+			String macros = "(:require-macros [lib.macros :as m])";
+			String use = "(:use [lib.old :only [c]])";
+			String source = "(ns demo\n  \"😀\"\n  " + require + "\n  " + macros + "\n  "
+				+ use + "\n  #_(:require [ignored])\n  (:import java.io.File))";
+			source = source.replace("\n", newline);
+			CstRoot root = plugin.parse(sources(source));
+			CstNode namespace = root.getNodes().get(0).getNodes().get(0);
+			assertEquals(3, namespace.getNodes().size());
+			String[] spans = {require, macros, use};
+			String[] types = {"RequireClause", "RequireMacrosClause", "UseClause"};
+			for (int i = 0; i < spans.length; i++) {
+				CstNode clause = namespace.getNodes().get(i);
+				assertEquals(types[i], clause.getType());
+				assertSame(namespace, clause.getParent().get());
+				assertEquals(source.indexOf(spans[i]), clause.getLocation().getBegin());
+				assertEquals(spans[i], source.substring(clause.getLocation().getBegin(), clause.getLocation().getEnd()));
+			}
+			Method serialize = RunClojureCommitJson.class.getDeclaredMethod("entities", CstRoot.class);
+			serialize.setAccessible(true);
+			for (JsonNode entity : (JsonNode) serialize.invoke(null, root)) {
+				if ("RequireClause".equals(entity.get("type").asText())) {
+					assertEquals(namespace.getId(), entity.get("parent_id").asInt());
+				}
+			}
+		}
+	}
+
+	@Test
+	public void shouldPairClauseKindsWhenReorderedAndAliasesEdited() throws Exception {
+		CstDiff diff = compare("(ns demo (:require [lib :as old]) (:use [legacy :only [f]]))",
+			"(ns demo (:use [legacy :only [f]]) (:require [lib :as updated]))");
+		assertEquals(4, diff.getRelationships().size());
+		assertTrue(diff.getRelationships().stream().allMatch(r -> r.getType() == RelationshipType.SAME));
+		assertTrue(diff.getRefactoringRelationships().isEmpty());
+	}
+
+	@Test
+	public void shouldKeepRepeatedClausesDistinct() throws Exception {
+		CstNode namespace = plugin.parse(sources("(ns demo (:require [a]) (:require [b]))"))
+			.getNodes().get(0).getNodes().get(0);
+		assertEquals(":require#1", namespace.getNodes().get(0).getLocalName());
+		assertEquals(":require#2", namespace.getNodes().get(1).getLocalName());
 	}
 
 	private CstDiff compare(String before, String after) throws Exception {
