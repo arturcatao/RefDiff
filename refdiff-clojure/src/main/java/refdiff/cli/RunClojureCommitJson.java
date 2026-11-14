@@ -49,7 +49,8 @@ public class RunClojureCommitJson {
 			writeError(e.status, e.getMessage());
 			System.exit(1);
 		} catch (Exception e) {
-			writeError("refdiff_failed", e.getMessage() == null ? e.getClass().getName() : e.getMessage());
+			writeJson(failureDetails(e), System.out);
+			e.printStackTrace(System.err);
 			System.exit(1);
 		}
 	}
@@ -187,6 +188,21 @@ public class RunClojureCommitJson {
 		}
 		ArrayNode parameters = result.putArray("parameters");
 		node.getParameters().forEach(parameter -> parameters.add(parameter.getName()));
+		return result;
+	}
+
+	static ObjectNode failureDetails(Throwable failure) {
+		ObjectNode result = JSON.createObjectNode();
+		result.put("schema_version", "1.0");
+		result.put("status", "refdiff_failed");
+		result.put("error", failure.getMessage() == null ? failure.getClass().getName() : failure.getMessage());
+		ArrayNode causes = result.putArray("causes");
+		java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable, Boolean>());
+		for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+			ObjectNode entry = causes.addObject();
+			entry.put("exception_class", cause.getClass().getName());
+			entry.put("message", cause.getMessage());
+		}
 		return result;
 	}
 
