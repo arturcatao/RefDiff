@@ -30,6 +30,7 @@ public class RewriteCljTokenizer {
 	private static final IFn CHILDREN;
 	private static final IFn LEADER_LENGTH;
 	private static final IFn META;
+	private static final IFn STRING;
 
 	private static final Keyword ROW = Keyword.intern(null, "row");
 	private static final Keyword COL = Keyword.intern(null, "col");
@@ -50,6 +51,7 @@ public class RewriteCljTokenizer {
 		CHILDREN = Clojure.var("rewrite-clj.node", "children");
 		LEADER_LENGTH = Clojure.var("rewrite-clj.node", "leader-length");
 		META = Clojure.var("clojure.core", "meta");
+		STRING = Clojure.var("rewrite-clj.node", "string");
 
 		Set<String> ignoredTags = new HashSet<>();
 		Collections.addAll(ignoredTags, "whitespace", "newline", "comma");
@@ -103,6 +105,23 @@ public class RewriteCljTokenizer {
 
 		int nodeStart = start(node, sourceText);
 		int nodeEnd = end(node, sourceText);
+		// rewrite-clj 1.3.59 synthesizes the ? / ?@ child of a reader
+		// conditional without metadata. Its exact spelling is part of the
+		// positioned parent's prefix; emit it through the prefix path below.
+		// All actual branch nodes remain in the traversal.
+		if ("reader-macro".equals(tag) && childNodes.size() > 1
+				&& META.invoke(childNodes.get(0)) == null) {
+			Object marker = childNodes.get(0);
+			String spelling = String.valueOf(STRING.invoke(marker));
+			if ("token".equals(tag(marker)) && ("?".equals(spelling) || "?@".equals(spelling))) {
+				int prefixEnd = nodeStart + 1 + spelling.length();
+				int nextStart = start(childNodes.get(1), sourceText);
+				if (prefixEnd <= nextStart && nextStart <= nodeEnd
+						&& ("#" + spelling).equals(sourceText.originalSlice(nodeStart, prefixEnd))) {
+					childNodes = childNodes.subList(1, childNodes.size());
+				}
+			}
+		}
 		int firstChildStart = start(childNodes.get(0), sourceText);
 		int lastChildEnd = end(childNodes.get(childNodes.size() - 1), sourceText);
 
